@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualización con Encabezado Fijo</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            background-color: #f4f4f4;
+        }
+        h1 { text-align: center; }
+
+        .app-container {
+            width: 100%;
+            max-width: 1400px;
+            margin: auto;
+        }
+        
+        .sticky-header {
+            position: sticky;
+            top: 0;
+            background-color: #ffffff;
+            padding: 10px;
+            z-index: 100;
+            border-bottom: 1px solid #ccc;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .filters {
+            display: flex; gap: 15px; margin-bottom: 10px;
+            flex-wrap: wrap; justify-content: center;
+        }
+        .filter-group { display: flex; flex-direction: column; }
+        .filter-group label { font-size: 12px; margin-bottom: 4px; }
+        
+        /* Contenedor del scroll para el cuerpo del gráfico */
+        #chart-body-container {
+            max-height: 80vh; /* Altura máxima antes de que aparezca el scroll vertical */
+            overflow-y: auto;
+            overflow-x: auto; /* Scroll horizontal si es necesario */
+            border-left: 1px solid #ccc;
+        }
+        
+        .main-content {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+        
+        #chart-and-axis-container {
+            flex-grow: 1;
+        }
+
+        /* Tooltip y estilo de ejes */
+        .custom-tooltip { position: absolute; visibility: hidden; background-color: rgba(0,0,0,0.85); color: white; border-radius: 6px; padding: 10px; font-size: 13px; pointer-events: none; max-width: 400px; white-space: pre-wrap; z-index: 1000; }
+        .axis .domain { stroke: #ccc; }
+        .axis .tick line { stroke: #ccc; }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="sticky-header">
+            <h1>Análisis de Eventos y Comunicaciones</h1>
+            <div class="filters">
+                <!-- Filtros aquí -->
+                <div class="filter-group"><label for="community-filter">Comunidades:</label><select id="community-filter" multiple size="4"></select></div>
+                <div class="filter-group"><label for="entity-filter">Entidades:</label><select id="entity-filter" multiple size="4"></select></div>
+                <div class="filter-group"><label for="monitoring-filter">Tipo de Monitoreo:</label><select id="monitoring-filter" multiple size="4"></select></div>
+                <div class="filter-group"><label for="start-date">Fecha Desde:</label><input type="date" id="start-date"></div>
+                <div class="filter-group"><label for="end-date">Fecha Hasta:</label><input type="date" id="end-date"></div>
+            </div>
+            <!-- El eje superior ahora es un SVG que se pega -->
+            <div id="top-axis-container"></div>
+        </div>
+
+        <div class="main-content">
+            <div id="chart-and-axis-container">
+                <!-- Contenedor para el eje Y y el cuerpo del gráfico -->
+                <div style="display: flex;">
+                    <div id="y-axis-container"></div>
+                    <div id="chart-body-container"></div>
+                </div>
+            </div>
+            <div id="legends-container"></div>
+        </div>
+    </div>
+    
+    <div class="custom-tooltip"></div>
+
+    <script>
+        async function main() {
+            // ... (TODA LA LÓGICA DE CARGA Y POBLADO DE FILTROS SE MANTIENE IGUAL) ...
+            const rawData = await d3.csv("datos_para_observable.csv");
+            const data = rawData.map(d => ({ ...d, time: new Date(d.time) }));
+            const allEntities = Array.from(new Set(data.flatMap(d => [d.from_id, d.to_id]))).filter(Boolean).sort();
+            const allCommunities = Array.from(new Set(data.map(d => d.source_community))).filter(d => d && d !== 'N/A').sort((a, b) => a - b);
+            const monitoringSubtypes = Array.from(new Set(data.map(d => d.monitoring_subtype))).filter(Boolean);
+            const [minDate, maxDate] = d3.extent(data, d => d.time);
+
+            const communityFilterEl = document.getElementById('community-filter');
+            const entityFilterEl = document.getElementById('entity-filter');
+            const monitoringFilterEl = document.getElementById('monitoring-filter');
+            const startDateEl = document.getElementById('start-date');
+            const endDateEl = document.getElementById('end-date');
+
+            const formatDateForInput = d3.utcFormat("%Y-%m-%d");
+            startDateEl.value = formatDateForInput(minDate);
+            endDateEl.value = formatDateForInput(maxDate);
+
+            allCommunities.forEach(c => { communityFilterEl.add(new Option(`Comunidad ${c}`, c, true, true)); });
+            allEntities.forEach(e => { entityFilterEl.add(new Option(e, e, true, true)); });
+            monitoringSubtypes.forEach(s => { monitoringFilterEl.add(new Option(s, s, true, true)); });
+
+            function drawChart() {
+                // ... (LÓGICA DE FILTRADO Y PROCESAMIENTO DE DATOS SE MANTIENE IGUAL) ...
+                 const selectedCommunities = Array.from(communityFilterEl.selectedOptions).map(opt => opt.value);
+                const selectedEntities = Array.from(entityFilterEl.selectedOptions).map(opt => opt.value);
+                const selectedMonitoring = Array.from(monitoringFilterEl.selectedOptions).map(opt => opt.value);
+                const startDate = new Date(startDateEl.value);
+                const endDate = new Date(endDateEl.value);
+                endDate.setHours(23, 59, 59, 999);
+
+                const filteredData = data.filter(d => { const time = d.time.getTime(); if (time < startDate.getTime() || time > endDate.getTime()) return false; if (d.event_type === 'Communication') { return selectedCommunities.includes(d.source_community) && selectedEntities.includes(d.from_id) && selectedEntities.includes(d.to_id); } if (d.event_type === 'Monitoring') { return selectedMonitoring.includes(d.monitoring_subtype); } return false; });
+                const filteredCommunications = filteredData.filter(d => d.event_type === 'Communication');
+                const filteredMonitoring = filteredData.filter(d => d.event_type === 'Monitoring');
+                
+                const TIME_THRESHOLD = 5 * 60 * 1000;
+                const sessions = [];
+                const singleMessages = [];
+                const sortedComms = filteredCommunications.sort((a, b) => a.time - b.time);
+                const processedIndices = new Set();
+                for (let i = 0; i < sortedComms.length; i++) { if (processedIndices.has(i)) continue; const msg1 = sortedComms[i]; let foundPair = false; for (let j = i + 1; j < sortedComms.length; j++) { if (processedIndices.has(j)) continue; const msg2 = sortedComms[j]; if (msg2.time - msg1.time > TIME_THRESHOLD) break; if (msg2.from_id === msg1.to_id && msg2.to_id === msg1.from_id) { sessions.push({ type: 'session', participants: [msg1.from_id, msg1.to_id].sort(), startTime: msg1.time, endTime: msg2.time, messages: [msg1, msg2], community: msg1.source_community }); processedIndices.add(i); processedIndices.add(j); foundPair = true; break; } } if (!foundPair) { singleMessages.push(msg1); } }
+                
+                // --- LÓGICA DE DIBUJO ACTUALIZADA ---
+                const yAxisContainer = d3.select("#y-axis-container");
+                const chartBodyContainer = d3.select("#chart-body-container");
+                const topAxisContainer = d3.select("#top-axis-container");
+                yAxisContainer.html("");
+                chartBodyContainer.html("");
+                topAxisContainer.html("");
+
+                const margin = { top: 30, right: 20, bottom: 120, left: 160 };
+                const width = Math.max(800, selectedEntities.length * 60); // Ancho dinámico
+                const height = 1500;
+
+                const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allCommunities);
+                const monitoringColorScale = d3.scaleOrdinal(d3.schemeSet2).domain(monitoringSubtypes);
+                const tooltip = d3.select(".custom-tooltip");
+
+                const yScale = d3.scaleUtc().domain([startDate, endDate]).range([0, height - margin.bottom]);
+                const xScale = d3.scalePoint().domain(selectedEntities).range([0, width - margin.left - margin.right]).padding(0.5);
+
+                // --- DIBUJAR LOS TRES SVGs ---
+                const yAxisSvg = yAxisContainer.append("svg").attr("width", margin.left).attr("height", height);
+                const topAxisSvg = topAxisContainer.append("svg").attr("width", width).attr("height", margin.top);
+                const chartBodySvg = chartBodyContainer.append("svg").attr("width", width - margin.left).attr("height", height);
+
+                // Dibujar eje Y en su SVG
+                yAxisSvg.append("g").attr("transform", `translate(${margin.left - 1}, 0)`).call(d3.axisLeft(yScale).ticks(d3.utcHour.every(4)).tickFormat(d3.utcFormat("%H:%M %b %d")));
+
+                // Dibujar eje X superior en su SVG
+                topAxisSvg.append("g").attr("transform", `translate(${margin.left}, ${margin.top - 1})`).call(d3.axisTop(xScale)).selectAll("text").style("text-anchor", "start").attr("dx", ".8em").attr("dy", ".15em").attr("transform", "rotate(-45)").style("fill", d => { const row = data.find(r => r.from_id === d || r.to_id === d); return row ? colorScale(row.source_community || row.target_community) : '#000'; });
+
+                // --- El resto se dibuja en el SVG del cuerpo del gráfico ---
+                const chartGroup = chartBodySvg.append("g");
+                const defs = chartGroup.append("defs");
+                allCommunities.forEach(community => { defs.append("marker").attr("id", `arrowhead-${community}`).attr("viewBox", "0 -5 10 10").attr("refX", 10).attr("refY", 0).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto").append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", colorScale(community)); });
+
+                const lastState = {};
+                const pathData = [];
+                singleMessages.forEach(d => { if (!xScale(d.from_id) || !xScale(d.to_id)) return; const y_current = yScale(d.time); const x_source = xScale(d.from_id); const x_target = xScale(d.to_id); let x1, y1; if (lastState[d.from_id]) { x1 = lastState[d.from_id].x; y1 = lastState[d.from_id].y; } else { x1 = x_source; y1 = y_current; } pathData.push({ x1, y1, x2: x_target, y2: y_current, ...d }); lastState[d.from_id] = { x: x_source, y: y_current }; lastState[d.to_id] = { x: x_target, y: y_current }; });
+
+                chartGroup.selectAll(".monitor-line").data(filteredMonitoring).join("line").attr("x1", 0).attr("x2", width - margin.left).attr("y1", d => yScale(d.time)).attr("y2", d => yScale(d.time)).style("cursor", "pointer").attr("stroke", d => monitoringColorScale(d.monitoring_subtype)).attr("stroke-width", 3).attr("stroke-dasharray", "4 4").attr("opacity", 0.7).on("mouseover", (event, d) => tooltip.style("visibility", "visible").html(`<b>Tipo:</b> ${d.monitoring_subtype}<br><hr style="margin:4px 0;"><b>Hallazgos:</b><br>${d.event_findings}`)).on("mousemove", (event) => tooltip.style("top", (event.pageY + 10) + "px").style("left", (event.pageX + 10) + "px")).on("mouseout", () => tooltip.style("visibility", "hidden"));
+                chartGroup.append("g").selectAll(".session-rect").data(sessions).join("rect").attr("x", d => Math.min(xScale(d.participants[0]), xScale(d.participants[1]))).attr("y", d => yScale(d.startTime)).attr("width", d => Math.abs(xScale(d.participants[0]) - xScale(d.participants[1]))).attr("height", d => Math.max(1, yScale(d.endTime) - yScale(d.startTime))).attr("fill", d => colorScale(d.community)).attr("opacity", 0.4).style("cursor", "pointer").on("mouseover", (event, d) => { const messagesText = d.messages.map(m => `<b>${m.from_id} (${d3.utcFormat("%H:%M:%S")(m.time)}):</b><br>${m.text}`).join('<br><hr style="margin: 4px 0;">'); tooltip.style("visibility", "visible").html(`<b>Conversación:</b><br><hr style="margin: 4px 0;">${messagesText}`); }).on("mousemove", (event) => tooltip.style("top", (event.pageY + 10) + "px").style("left", (event.pageX + 10) + "px")).on("mouseout", () => tooltip.style("visibility", "hidden"));
+                chartGroup.selectAll(".comm-line").data(pathData).join("line").attr("x1", d => d.x1).attr("y1", d => d.y1).attr("x2", d => d.x2).attr("y2", d => d.y2).style("cursor", "pointer").attr("stroke", d => colorScale(d.source_community)).attr("stroke-width", 3).attr("marker-end", d => `url(#arrowhead-${d.source_community})`).on("mouseover", (event, d) => tooltip.style("visibility", "visible").html(`<b>De:</b> ${d.from_id}<br><b>A:</b> ${d.to_id}<hr><b>Mensaje:</b><br>${d.text}`)).on("mousemove", (event) => tooltip.style("top", (event.pageY + 10) + "px").style("left", (event.pageX + 10) + "px")).on("mouseout", () => tooltip.style("visibility", "hidden"));
+            }
+
+            // ... (el código de drawLegends y los Event Listeners se queda igual) ...
+            function drawLegends() { const legendsContainer = d3.select("#legends-container"); legendsContainer.html(""); const communityColorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(allCommunities); const communityLegendSvg = legendsContainer.append("svg").attr("height", allCommunities.length * 20 + 40).attr("width", 200); communityLegendSvg.append("g").attr("transform", "translate(10, 20)").call(g => { g.append("text").attr("y", -5).style("font-weight", "bold").text("Comunidades"); const items = g.selectAll(".legend-item").data(allCommunities).join("g").attr("transform", (d, i) => `translate(0, ${i * 20})`); items.append("rect").attr("width", 15).attr("height", 15).style("fill", d => communityColorScale(d)); items.append("text").attr("x", 20).attr("y", 12).text(d => `Comunidad ${d}`).style("font-size", "12px"); }); const monitoringColorScale = d3.scaleOrdinal(d3.schemeSet2).domain(monitoringSubtypes); const monitoringLegendSvg = legendsContainer.append("svg").attr("height", monitoringSubtypes.length * 20 + 40).attr("width", 250); monitoringLegendSvg.append("g").attr("transform", "translate(10, 20)").call(g => { g.append("text").attr("y", -5).style("font-weight", "bold").text("Tipos de Monitoreo"); const items = g.selectAll(".legend-item").data(monitoringSubtypes).join("g").attr("transform", (d, i) => `translate(0, ${i * 20})`); items.append("rect").attr("width", 15).attr("height", 15).style("fill", d => monitoringColorScale(d)); items.append("text").attr("x", 20).attr("y", 12).text(d => d).style("font-size", "12px"); }); }
+            communityFilterEl.addEventListener('change', () => { const selectedCommunities = Array.from(communityFilterEl.selectedOptions).map(opt => opt.value); const entitiesToShow = allEntities.filter(entity => { const row = data.find(d => d.from_id === entity || d.to_id === entity); return row && selectedCommunities.includes(row.source_community || row.target_community); }); entityFilterEl.innerHTML = ""; entitiesToShow.forEach(e => { entityFilterEl.add(new Option(e, e, true, true)); }); drawChart(); });
+            [entityFilterEl, monitoringFilterEl, startDateEl, endDateEl].forEach(el => { el.addEventListener('change', drawChart); });
+            
+            drawChart();
+            drawLegends();
+        }
+
+        main();
+    </script>
+</body>
+</html>
